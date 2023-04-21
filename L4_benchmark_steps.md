@@ -169,7 +169,6 @@ print(float(period/20))
 ```
 python test.py &
 nvidia-smi
-nvidia-smi -i
 ```
 
 ### 4. Benchmark
