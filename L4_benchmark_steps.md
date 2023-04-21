@@ -25,7 +25,7 @@ lspci | grep -i nvidia
 uname -m && cat /etc/*release
 ```
 
-##### 2.4 install gcc
+#### 2.4 install gcc
 
 https://linuxize.com/post/how-to-install-gcc-compiler-on-debian-10/
 ```
@@ -120,12 +120,13 @@ gcloud init
 gcloud auth configure-docker \
     us-central1-docker.pkg.dev
 ```
-### 7. Run docker image
+## Test Diffuser library
+### 1. Run docker image
 ```
 sudo docker run --gpus all -it nvcr.io/nvidia/pytorch:23.03-py3 /bin/bash
 ```
 
-### 8. Install libraries and run test
+### 2. Install diffusers libraries and run test
 ```
 git clone https://github.com/huggingface/diffusers.git
 pip install --upgrade diffusers[torch]
@@ -164,14 +165,14 @@ end_time = time.time()
 period = end_time - start_time
 print(float(period/20))
 ```
-### 9. Run and monitor GPU
+### 3. Run and monitor GPU
 ```
 python test.py &
 nvidia-smi
 nvidia-smi -i
 ```
 
-### 10. Benchmark
+### 4. Benchmark
 
 - docker: nvcr.io/nvidia/pytorch:23.03-py3
 - diffusers library
@@ -188,3 +189,76 @@ nvidia-smi -i
 |  utilization  |    100%      |     100%     |     100%     |     100%     |
 |     power     |    70W       |     70W      |     70W      |     70W      |
 |     memory    |    6.7GB     |     12GB     |     7GB      |     11.5GB   |
+
+## Test Webui
+### 1. Copy docker image
+Reference https://github.com/nonokangwei/Stable-Diffusion-on-GCP/blob/main/Stable-Diffusion-UI-Novel/docker_inference/Dockerfile.20230329
+```
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+RUN set -ex && \
+    apt update && \
+    apt install -y wget git python3 python3-venv python3-pip xdg-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/usr/local/cuda/lib64
+RUN ln -s /usr/local/cuda/lib64/libcudart.so.11.0 /usr/local/cuda/lib64/libcudart.so
+
+RUN git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git
+
+RUN pip install torch==1.13.1+cu117 torchvision==0.14.1+cu117 --extra-index-url https://download.pytorch.org/whl/cu117
+
+RUN set -ex && cd stable-diffusion-webui \
+    && mkdir repositories \
+    && git clone https://github.com/CompVis/stable-diffusion.git repositories/stable-diffusion \
+    && git clone https://github.com/CompVis/taming-transformers.git repositories/taming-transformers\
+    && git clone https://github.com/sczhou/CodeFormer.git repositories/CodeFormer \
+    && git clone https://github.com/salesforce/BLIP.git repositories/BLIP \
+    && git clone https://github.com/crowsonkb/k-diffusion.git repositories/k-diffusion \
+    && git clone https://github.com/Stability-AI/stablediffusion repositories/stable-diffusion-stability-ai \
+    && pip install transformers diffusers invisible-watermark --prefer-binary \
+    && pip install git+https://github.com/crowsonkb/k-diffusion.git --prefer-binary \
+    && pip install git+https://github.com/TencentARC/GFPGAN.git --prefer-binary \
+    && pip install git+https://github.com/mlfoundations/open_clip.git --prefer-binary \
+    && pip install -r repositories/CodeFormer/requirements.txt --prefer-binary \
+    && pip install -r requirements.txt --prefer-binary
+
+RUN pip install opencv-contrib-python-headless opencv-python-headless xformers
+RUN pip install --upgrade fastapi==0.90.1
+RUN cp /stable-diffusion-webui/repositories/CodeFormer/basicsr/utils/misc.py \
+    /usr/local/lib/python3.10/dist-packages/basicsr/utils/misc.py
+
+EXPOSE 7860
+
+WORKDIR /stable-diffusion-webui/
+CMD ["python3", "webui.py", "--listen", "--xformers",  "--medvram"]
+```
+
+### 2. Build docker image
+```
+sudo docker build -t webui:v1 .
+```
+
+### 3. Run and test
+```
+sudo docker run --gpus all -it -p 7860:7860 webui:v1
+```
+open YOUR_PUBLIC_IP_ADDRESS:7860 for test
+
+### 4. Benchmark
+- docker: nvcr.io/nvidia/pytorch:23.03-py3
+- AUTOMATIC1111 Webui
+- prompt: ”An image of a squirrel in Picasso style”
+- parameters: model=SD1.5-pruned-emaonly, inf_step=20, cfg_scale=7.5, resolution=512x512, scheduler=Euler_A, seed=123
+- GPU driver: 530.30.02
+- CUDA: 12.1
+
+|               |     T4       |      T4      |     L4       |     L4       |
+|---------------|:------------:|-------------:|-------------:|-------------:|
+|               | batch_size=4 | batch_size=1 | batch_size=4 | batch_size=1 |
+|     time      |     16       |     6.04     |      16      |     7.02     |
+|  utilization  |    100%      |     100%     |     100%     |     94%      |
+|     power     |    70W       |     55W      |     80W      |     79W      |
+|     memory    |    2.4GB     |     2.3GB    |     2.5GB    |     2.3GB    |
+
+It's weird that T4 has competable performance with L4 when using WebUI. Investigation needed!
